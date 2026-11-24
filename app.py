@@ -1,8 +1,78 @@
-import re, time, html, joblib, numpy as np
+import re, time, html, math, json, gzip, os
+import numpy as np
 
-MODEL_FILE = "svm_model.joblib"
-M = joblib.load(MODEL_FILE)
-CLASSES = M["svm"].classes_
+FOLDER = os.path.dirname(os.path.abspath(__file__))
+
+_WS = re.compile(r"\s\s+")
+_TOKEN = re.compile(r"(?u)\b\w\w+\b")
+
+
+def char_wb_ngrams(text, lo=2, hi=5):
+    text = _WS.sub(" ", text)
+    out = []
+    for w in text.split():
+        w = " " + w + " "
+        n_w = len(w)
+        for n in range(lo, hi + 1):
+            off = 0
+            out.append(w[off:off + n])
+            while off + n < n_w:
+                off += 1
+                out.append(w[off:off + n])
+            if off == 0:
+                break
+    return out
+
+
+def word_ngrams(text, lo=1, hi=2):
+    toks = _TOKEN.findall(text)
+    out = list(toks)
+    for n in range(2, min(hi + 1, len(toks) + 1)):
+        for i in range(len(toks) - n + 1):
+            out.append(" ".join(toks[i:i + n]))
+    return out
+
+
+class PortableModel:
+    def __init__(self, folder):
+        with gzip.open(os.path.join(folder, "model_vocab.json.gz"), "rt", encoding="utf-8") as f:
+            v = json.load(f)
+        self.vc, self.vw = v["char"], v["word"]
+        z = np.load(os.path.join(folder, "model_arrays.npz"), allow_pickle=False)
+        self.idf_c, self.idf_w = z["idf_char"], z["idf_word"]
+        self.coefT = z["coefT"].astype(np.float32)      # (features, classes)
+        self.intercept = z["intercept"].astype(np.float32)
+        self.classes_ = z["classes"]
+        self.off = len(self.vc)
+
+    def _block(self, terms, vocab, idf, offset):
+        cnt = {}
+        for t in terms:
+            i = vocab.get(t)
+            if i is not None:
+                cnt[i] = cnt.get(i, 0) + 1
+        if not cnt:
+            return [], []
+        idx = list(cnt)
+        val = np.array([(1.0 + math.log(cnt[i])) * idf[i] for i in idx], dtype=np.float64)
+        nrm = math.sqrt(float((val * val).sum()))
+        if nrm > 0:
+            val = val / nrm
+        return [i + offset for i in idx], list(val)
+
+    def decision(self, text):
+        text = text.lower()
+        a, b = self._block(char_wb_ngrams(text), self.vc, self.idf_c, 0)
+        c, d = self._block(word_ngrams(text), self.vw, self.idf_w, self.off)
+        idx = a + c
+        val = np.array(b + d, dtype=np.float32)
+        if not idx:
+            return self.intercept.copy()
+        return (self.coefT[idx] * val[:, None]).sum(0) + self.intercept
+
+
+P = PortableModel(FOLDER)
+CLASSES = P.classes_
 DEV = re.compile(r"[\u0900-\u097F]")
 LAT = re.compile(r"[A-Za-z]")
 
@@ -51,7 +121,7 @@ def script_of(text):
 
 def classify(text):
     t0 = time.perf_counter()
-    d = M["svm"].decision_function(M["feats"].transform([text.lower().strip()]))
+    d = P.decision(text.strip())[None, :]
     p = softmax(d)[0]
     top = np.argsort(-p)[:3]
     ms = (time.perf_counter() - t0) * 1000
