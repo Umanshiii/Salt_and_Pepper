@@ -1,7 +1,5 @@
 # Hindi and Hinglish Intent Classification (Anveshan DataSprint 2.0, NLP track)
 
-Team: ronak.gupta2427
-
 A compact pipeline that classifies Hindi (Devanagari) and Hinglish (Roman script) voice-assistant queries into 56 intents. Class 55 is the out-of-scope fallback. Metric: unweighted Macro-F1.
 
 - Public leaderboard: **0.84215** Macro-F1 (the private score is revealed after the deadline)
